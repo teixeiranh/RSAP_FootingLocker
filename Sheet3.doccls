@@ -1,0 +1,632 @@
+﻿'@Folder "RSAPFootings.02_SpreadFooting"
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@ModuleDescription "Procedure that creates a spread footing on the selected walls."
+'
+'input: Robot Structural Analysis panel selection.
+'output: Horizontal panel modelling the foundation/footing slab object.
+'
+'Developer: Nuno Teixeira
+'Email: teixeiranh@gmail.com
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+'@IgnoreModule ParameterCanBeByVal
+'@IgnoreModule UseMeaningfulName
+Option Explicit
+
+Private robApp As RobotApplication
+Private structure As RobotStructure
+
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@Description "Main Procedure"
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'Each of the created slabs (on slab per wall) will have 7 characteristic points created:
+'-Node1 and Node4 are the extremes panel nodes;
+'-Node2 and Node6 are the nodes connected to Node1;
+'-Node3 and Node5 are the nodes connected to Node4.
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+'@Ignore ProcedureNotUsed
+Public Sub MainCreateWallFootings()
+    
+    Debug.Print "----------------------" 'Debug code
+    Debug.Print "---------RUN----------" 'Debug code
+    Debug.Print "----------------------" 'Debug code
+        
+    'Declaring variables
+    Set robApp = New RobotApplication
+    Set structure = robApp.Project.structure
+    Dim objectServer As RobotObjObjectServer
+    Set objectServer = structure.Objects
+    Dim labels As RobotLabelServer
+    Set labels = structure.labels
+    Dim panelSelection As RobotSelection
+    Set panelSelection = robApp.Project.structure.Selections.Get(I_OT_PANEL)
+
+    Dim contourGeometry As RobotGeoContour
+    Dim adjacentContourGeometry As RobotGeoContour
+    Dim segments As RobotGeoSegmentCollection
+    Dim adjacentSegments As RobotGeoSegmentCollection
+    '@Ignore VariableNotUsed, VariableNotAssigned
+    Dim segment As RobotGeoSegment
+    Dim currentPanel As RobotObjObject
+    Dim adjacentPanel As RobotObjObject
+
+    Dim points As RobotPointsArray
+    Dim currentPanelDTO As CWallFootingDTO
+'    Set currentPanelDTO = New CWallFootingDTO
+    Dim adjacentPanelDTO As CWallFootingDTO
+'    Set adjacentPanelDTO = New CWallFootingDTO
+    
+    Dim footingWidth As Double
+    footingWidth = Range("C2").value
+    Dim slabSectionName As String
+    Dim previousPanelCounter As Integer
+    Dim nextPanelCounter As Integer
+    Dim halfFootingWidth As Double
+    halfFootingWidth = footingWidth / 2
+    Dim previousPanelDTOPointData() As Variant
+    Dim nextPanelDTOPointData() As Variant
+    Dim ii As Integer
+    Dim jj As Integer
+    Dim numberOfSegments As Integer
+
+    slabSectionName = Range("C4").value
+    
+    Dim foundationThickness As Double
+    foundationThickness = Range("C3").value
+    
+    'Method to assign thickness to slab, with all the properties necessary
+    MRSAPUtilities.AssignThickness labels, slabSectionName, foundationThickness
+'    AssignThickness labels, SlabSectionName
+    MRSAPUtilities.VerifyIfRobotIsOpened
+    MRSAPUtilities.SetActiveStates
+    
+    Range("B13").value = "Wall: "
+    Range("B14").value = "Walls: "
+    Range("C14").value = panelSelection.Count
+    
+    On Error GoTo ErrorHandler
+    'For next loop to traverse panel selection
+    For ii = 1 To panelSelection.Count
+        Range("C13").value = ii
+        previousPanelCounter = 0
+        nextPanelCounter = 0
+        Set currentPanelDTO = New CWallFootingDTO
+        '@Ignore SetAssignmentWithIncompatibleObjectType
+        Set currentPanel = objectServer.Get(panelSelection.Get(ii))
+        Debug.Print "----------------------"
+        Debug.Print "Panel: " & currentPanel.Number 'Debug code
+        'Check if panel ii is properly defined
+        If currentPanel.Main.GetGeometry.Type = I_GOT_CONTOUR Then
+            Set contourGeometry = currentPanel.Main.GetGeometry
+            Set segments = contourGeometry.segments
+            'Array to store panel's bootom edge information
+            Dim PointData() As Variant
+            numberOfSegments = segments.Count
+            ReDim PointData(numberOfSegments, 4)
+            Erase previousPanelDTOPointData
+            Erase nextPanelDTOPointData
+            'Method to get the coordinates for the ii panel of the selection
+            GetCoordinatesForPanel segments, currentPanelDTO, PointData
+            'Nested for loop, to get information related with neighbour panels
+            For jj = 1 To panelSelection.Count
+                Set adjacentPanel = objectServer.Get(panelSelection.Get(jj))
+                'Check if adjacent panel jj is properly defined
+                If adjacentPanel.Main.GetGeometry.Type = I_GOT_CONTOUR Then
+                    Set adjacentContourGeometry = adjacentPanel.Main.GetGeometry
+                    Set adjacentSegments = adjacentContourGeometry.segments
+                    numberOfSegments = adjacentSegments.Count
+                    'PoinData array used to obtain geometric information from RSAP adjacent panels
+                    ReDim PointData(numberOfSegments, 4)
+                    Set adjacentPanelDTO = New CWallFootingDTO
+                    GetCoordinatesForPanel adjacentSegments, adjacentPanelDTO, PointData
+                    'Verify if the adjacent panel is a previous one, ie, connected to Node1.
+                    'If True, fill it's geometric information to a DTO object Point Data.
+                    If currentPanelDTO.IsPoint1Coincident(adjacentPanelDTO) And _
+                    Not currentPanelDTO.IsTheSamePanel(adjacentPanelDTO) Then
+                        FillAdjacentPanelArray adjacentPanelDTO, previousPanelCounter, previousPanelDTOPointData
+                    'Verify if the adjacent panel is a next one, ie, connected to Node4.
+                    'If True, fill it's geometric information to a DTO object Point Data.
+                    ElseIf currentPanelDTO.IsPoint4Coincident(adjacentPanelDTO) And _
+                    Not currentPanelDTO.IsTheSamePanel(adjacentPanelDTO) Then
+                        FillAdjacentPanelArray adjacentPanelDTO, nextPanelCounter, nextPanelDTOPointData
+                    End If
+                End If
+            Next jj
+        End If
+        'Method to create slab points, back to Robot Structural Analysis
+        CreateSpreadFooting points, slabSectionName, currentPanelDTO, halfFootingWidth, _
+        previousPanelDTOPointData, nextPanelDTOPointData, previousPanelCounter, nextPanelCounter
+    Next ii
+   
+    'Refresh RSAP view manager
+    robApp.Project.ViewMngr.Refresh
+    'Clean variables
+    MRSAPUtilities.CleanVariables
+    ClearContentsFromCells
+    
+    Exit Sub
+ErrorHandler:
+    MsgBox (MConstants.ERROR_MESSAGE)
+    ClearContentsFromCells
+    
+End Sub
+
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@Description "Code to fill the arrays of the adjacent panels."
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+Private Sub FillAdjacentPanelArray(ByRef adjacentPanelDTO As CWallFootingDTO, _
+ByRef panelCounter As Integer, ByRef adjacentPanelDTOPointData() As Variant)
+    
+    ReDim Preserve adjacentPanelDTOPointData(6, panelCounter)
+    'z coordinate
+    adjacentPanelDTOPointData(0, panelCounter) = adjacentPanelDTO.z
+    'xx coordinate of the extreme point with lower xx value
+    adjacentPanelDTOPointData(1, panelCounter) = adjacentPanelDTO.x1
+    'yy coordinate of the extreme point with lower xx value
+    adjacentPanelDTOPointData(2, panelCounter) = adjacentPanelDTO.y1
+    'xx coordinate of the extreme point with bigger xx value
+    adjacentPanelDTOPointData(3, panelCounter) = adjacentPanelDTO.x2
+    'yy coordinate of the extreme point with bigger xx value
+    adjacentPanelDTOPointData(4, panelCounter) = adjacentPanelDTO.y2
+    'horizontal angle of the extreme point with lower xx value
+    adjacentPanelDTOPointData(5, panelCounter) = adjacentPanelDTO.horizontalAngle
+    'horizontal angle of the extreme point with bigger xx value
+    adjacentPanelDTOPointData(6, panelCounter) = adjacentPanelDTO.complementaryhorizontalAngle
+    'number of adjacent panel to be incremented by one after this procedure
+    panelCounter = panelCounter + 1
+    
+End Sub
+
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@Description "Code to get the necessary x,y,z coordinates of the selected panel."
+'These are lower Z coordinates, lower and higher X and Y.
+'With these, we will have two points:
+'Point 1 [Xmin,Ymin, Zmin], Point 2 [Xmax,Ymax,Zmin].
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+Private Sub GetCoordinatesForPanel(ByRef segments As RobotGeoSegmentCollection, ByRef dto As CWallFootingDTO, _
+ByRef PointData() As Variant)
+    
+    'Declaring variables
+    Dim ii As Integer
+    Dim jj As Integer
+
+    'For next loop to populate the PointData and DTO with information related to panel bottom,
+    'to be used in a next procedure
+    For ii = 1 To segments.Count
+        Dim segment As RobotGeoSegment
+        Set segment = segments.Get(ii)
+        PointData(ii, 2) = WorksheetFunction.Round(segment.P1.X, MConstants.TOLERANCE)
+        PointData(ii, 3) = WorksheetFunction.Round(segment.P1.Y, MConstants.TOLERANCE)
+        PointData(ii, 4) = WorksheetFunction.Round(segment.P1.z, MConstants.TOLERANCE)
+        
+        'Checks for the lower Z point
+        If PointData(ii, 4) <= dto.z Then
+            dto.z = PointData(ii, 4)
+            'With the lower Z point, checks for lower X point
+            If PointData(ii, 2) < dto.x1 Then
+                dto.x1 = PointData(ii, 2)
+                dto.y1 = PointData(ii, 3)
+            End If
+            'With the lower Z point, checks for higher X point
+            If PointData(ii, 2) > dto.x2 Then
+                dto.x2 = PointData(ii, 2)
+                dto.y2 = PointData(ii, 3)
+            End If
+            
+            'Treats the special case of having a vertical panel (in plan)
+            If dto.x1 = dto.x2 Then
+                For jj = 1 To segments.Count
+                    If PointData(ii, 4) = dto.z Then
+                        If PointData(ii, 3) < dto.y1Aux Then
+                            dto.y1Aux = PointData(ii, 3)
+                        End If
+                        If PointData(ii, 3) > dto.y2Aux Then
+                            dto.y2Aux = PointData(ii, 3)
+                        End If
+                    End If
+                Next jj
+                dto.y1 = dto.y1Aux
+                dto.y2 = dto.y2Aux
+            End If
+        End If
+    Next ii
+    dto.FindHorizontalAngles
+End Sub
+
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@Description "Code to create a slab."
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+Private Sub CreateSpreadFooting(ByRef points As RobotPointsArray, ByRef slabSectionName As String, _
+ByRef dto As CWallFootingDTO, ByVal metadeLargura As Double, ByRef previousPanelDTOPointData() As Variant, _
+ByRef nextPanelDTOPointData() As Variant, _
+ByRef previousPanelCounter As Integer, _
+ByRef nextPanelCounter As Integer)
+    
+    Set structure = robApp.Project.structure
+    Set points = robApp.CmpntFactory.Create(I_CT_POINTS_ARRAY)
+    points.SetSize 7
+    
+    'Declare varibles
+    Dim ObjNumber As Long
+    
+    Dim bisectorLengthPoint2 As Double, bisectorAnglePoint2 As Double
+    Dim bisectorLengthPoint3 As Double, bisectorAnglePoint3 As Double
+    Dim bisectorLengthPoint5 As Double, bisectorAnglePoint5 As Double
+    Dim bisectorLengthPoint6 As Double, bisectorAnglePoint6 As Double
+
+    Dim xPoint2 As Double, yPoint2 As Double, xPoint3 As Double, yPoint3 As Double
+    Dim xPoint5 As Double, yPoint5 As Double, xPoint6 As Double, yPoint6 As Double
+    
+    Dim minAndMaxArrayPrevious() As Variant, minAndMaxArrayNext() As Variant
+    
+    'Get the min and max angles between current and previous panel
+    minAndMaxArrayPrevious = MinAndMaxDTOPointDataPrevious(previousPanelDTOPointData, _
+    previousPanelCounter, dto)
+    
+    'Get the min and max angles between current and next panel
+    minAndMaxArrayNext = MinAndMaxDTOPointDataNext(nextPanelDTOPointData, _
+    nextPanelCounter, dto)
+
+    'Calculate points associated with first/lower edge of panel
+    If (minAndMaxArrayPrevious(0) < 0 And minAndMaxArrayPrevious(1) < 0 Or _
+    minAndMaxArrayPrevious(0) > 0 And minAndMaxArrayPrevious(1) > 0) Then
+        
+        'Point2
+        bisectorAnglePoint2 = minAndMaxArrayPrevious(1) / 2
+        bisectorLengthPoint2 = metadeLargura / Sin(minAndMaxArrayPrevious(1) / 2)
+        Debug.Print "P2Angle=" & bisectorAnglePoint2 'Debug code
+        Debug.Print "P2Length=" & bisectorLengthPoint2 'Debug code
+        xPoint2 = -bisectorLengthPoint2 * Cos(bisectorAnglePoint2 + dto.horizontalAngle)
+        yPoint2 = -bisectorLengthPoint2 * Sin(bisectorAnglePoint2 + dto.horizontalAngle)
+        
+        'Point6
+        bisectorAnglePoint6 = minAndMaxArrayPrevious(0) / 2
+        bisectorLengthPoint6 = metadeLargura / Sin(minAndMaxArrayPrevious(0) / 2)
+        Debug.Print "P6Angle=" & bisectorAnglePoint6 'Debug code
+        Debug.Print "P6Length=" & bisectorLengthPoint6 'Debug code
+        xPoint6 = bisectorLengthPoint6 * Cos(bisectorAnglePoint6 + dto.horizontalAngle)
+        yPoint6 = bisectorLengthPoint6 * Sin(bisectorAnglePoint6 + dto.horizontalAngle)
+
+    Else
+        
+        'Point2
+        bisectorAnglePoint2 = minAndMaxArrayPrevious(0) / 2
+        bisectorLengthPoint2 = metadeLargura / Sin(minAndMaxArrayPrevious(0) / 2)
+        Debug.Print "P2Angle=" & bisectorAnglePoint2 'Debug code
+        Debug.Print "P2Length=" & bisectorLengthPoint2 'Debug code
+        xPoint2 = -bisectorLengthPoint2 * Cos(bisectorAnglePoint2 + dto.horizontalAngle)
+        yPoint2 = -bisectorLengthPoint2 * Sin(bisectorAnglePoint2 + dto.horizontalAngle)
+        
+        'Point6
+        bisectorAnglePoint6 = minAndMaxArrayPrevious(1) / 2
+        bisectorLengthPoint6 = metadeLargura / Sin(minAndMaxArrayPrevious(1) / 2)
+        Debug.Print "P6Angle=" & bisectorAnglePoint6 'Debug code
+        Debug.Print "P6Length=" & bisectorLengthPoint6 'Debug code
+        xPoint6 = bisectorLengthPoint6 * Cos(bisectorAnglePoint6 + dto.horizontalAngle)
+        yPoint6 = bisectorLengthPoint6 * Sin(bisectorAnglePoint6 + dto.horizontalAngle)
+
+    End If
+    
+    'Calculate points associated with second/higher edge of panel
+    If (minAndMaxArrayNext(0) < 0 And minAndMaxArrayNext(1) < 0 Or _
+    minAndMaxArrayNext(0) > 0 And minAndMaxArrayNext(1) > 0) Then
+            
+        'Point3
+        bisectorAnglePoint3 = minAndMaxArrayNext(0) / 2
+        bisectorLengthPoint3 = metadeLargura / Sin(minAndMaxArrayNext(0) / 2)
+        'Debug code
+        Debug.Print "P3Angle=" & bisectorAnglePoint3
+        Debug.Print "P3Length=" & bisectorLengthPoint3
+        xPoint3 = bisectorLengthPoint3 * Cos(bisectorAnglePoint3 + dto.complementaryhorizontalAngle)
+        yPoint3 = bisectorLengthPoint3 * Sin(bisectorAnglePoint3 + dto.complementaryhorizontalAngle)
+        
+        'Point5
+        bisectorAnglePoint5 = minAndMaxArrayNext(1) / 2
+        bisectorLengthPoint5 = metadeLargura / Sin(minAndMaxArrayNext(1) / 2)
+        'Debug code
+        Debug.Print "P5Angle=" & bisectorAnglePoint5
+        Debug.Print "P5Length=" & bisectorLengthPoint5
+        xPoint5 = -bisectorLengthPoint5 * Cos(bisectorAnglePoint5 + dto.complementaryhorizontalAngle)
+        yPoint5 = -bisectorLengthPoint5 * Sin(bisectorAnglePoint5 + dto.complementaryhorizontalAngle)
+    
+    Else
+    
+        'Point3
+        bisectorAnglePoint3 = minAndMaxArrayNext(1) / 2
+        bisectorLengthPoint3 = metadeLargura / Sin(minAndMaxArrayNext(1) / 2)
+        'Debug code
+        Debug.Print "P3Angle=" & bisectorAnglePoint3
+        Debug.Print "P3Length=" & bisectorLengthPoint3
+        xPoint3 = bisectorLengthPoint3 * Cos(bisectorAnglePoint3 + dto.complementaryhorizontalAngle)
+        yPoint3 = bisectorLengthPoint3 * Sin(bisectorAnglePoint3 + dto.complementaryhorizontalAngle)
+        
+        'Point5
+        bisectorAnglePoint5 = minAndMaxArrayNext(0) / 2
+        bisectorLengthPoint5 = metadeLargura / Sin(minAndMaxArrayNext(0) / 2)
+        'Debug code
+        Debug.Print "P5Angle=" & bisectorAnglePoint5
+        Debug.Print "P5Length=" & bisectorLengthPoint5
+        xPoint5 = -bisectorLengthPoint5 * Cos(bisectorAnglePoint5 + dto.complementaryhorizontalAngle)
+        yPoint5 = -bisectorLengthPoint5 * Sin(bisectorAnglePoint5 + dto.complementaryhorizontalAngle)
+
+    End If
+    
+    'Define the nodes in Robot
+    With points
+        'Node1
+        .Set 1, dto.x1, dto.y1, dto.z
+        'Node2
+        .Set 2, _
+        dto.x1 + xPoint2, _
+        dto.y1 + yPoint2, _
+        dto.z
+        'Node3
+        .Set 3, _
+        dto.x2 + xPoint3, _
+        dto.y2 + yPoint3, _
+        dto.z
+        'Node4
+        .Set 4, dto.x2, dto.y2, dto.z
+        'Node5
+        .Set 5, _
+        dto.x2 + xPoint5, _
+        dto.y2 + yPoint5, _
+        dto.z
+        'Node6
+        .Set 6, _
+        dto.x1 + xPoint6, _
+        dto.y1 + yPoint6, _
+        dto.z
+        'Node7
+        .Set 7, dto.x1, dto.y1, dto.z
+        
+        MRSAPUtilities.CreatePanel points, slabSectionName
+
+    End With
+
+End Sub
+
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@Description "Function to find the maximum and minimum angles for point 1 (previous panel)."
+'It will find the difference and give, as result, an array with 2 entries [minimum, maximum].
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+Private Function MinAndMaxDTOPointDataPrevious(ByRef previousPanelData() As Variant, _
+ByVal previousPanelCounter As Integer, _
+ByRef dto As CWallFootingDTO) As Variant()
+    
+    'Declare variables
+    Dim diffArray() As Variant
+    Dim angleArray(0 To 1) As Variant
+    Dim upperAnglePositive As Double
+    Dim lowerAnglePositive As Double
+    Dim upperAngleNegative As Double
+    Dim lowerAngleNegative As Double
+    Dim upperAngle As Double
+    Dim lowerAngle As Double
+    Dim ii As Integer
+    Dim negativeCounter As Integer
+    Dim positiveCounter As Integer
+    
+    'Inicial values of minimum (really big value) and maximum (really small value)
+    lowerAnglePositive = 2147483647
+    upperAnglePositive = -2147483647
+    lowerAngleNegative = 2147483647
+    upperAngleNegative = -2147483647
+    negativeCounter = 0
+    positiveCounter = 0
+    
+    'Find the angles for isolated panel
+    If previousPanelCounter = 0 Then
+        lowerAngle = dto.complementaryhorizontalAngle - dto.horizontalAngle
+        upperAngle = lowerAngle
+      
+    'Find the angles for a panel with 1 connected and connected to Point1 of that panel
+    ElseIf previousPanelCounter = 1 And _
+    dto.IsPoint1CoincidentCoordinates(previousPanelData(1, 0), previousPanelData(2, 0)) Then
+        lowerAngle = previousPanelData(5, 0) - dto.horizontalAngle
+        upperAngle = lowerAngle
+        
+    'Find the angles for a panel with 1 connected and connected to Point4 of that panel
+    ElseIf previousPanelCounter = 1 And _
+    Not dto.IsPoint1CoincidentCoordinates(previousPanelData(3, 0), previousPanelData(4, 0)) Then
+        lowerAngle = previousPanelData(6, 0) - dto.horizontalAngle
+        upperAngle = lowerAngle
+        
+    Else
+        ReDim diffArray(0 To previousPanelCounter - 1) As Variant
+        'For Next loop to find, for panel Point1, all the differences between angles of the panels,
+        'and fill an array "diffArray()" with all those values
+        For ii = 0 To previousPanelCounter - 1
+            If dto.IsPoint1CoincidentCoordinates(previousPanelData(1, ii), previousPanelData(2, ii)) Then
+                diffArray(ii) = previousPanelData(5, ii) - dto.horizontalAngle
+                If previousPanelData(5, ii) - dto.horizontalAngle > 0 Then
+                    positiveCounter = positiveCounter + 1
+                Else
+                    negativeCounter = negativeCounter + 1
+                End If
+            Else
+                diffArray(ii) = previousPanelData(6, ii) - dto.horizontalAngle
+                
+                If previousPanelData(6, ii) - dto.horizontalAngle > 0 Then
+                    positiveCounter = positiveCounter + 1
+                Else
+                    negativeCounter = negativeCounter + 1
+                End If
+            End If
+        Next ii
+        
+        'With the values filled previously, find the max and min array of interest
+        FindMaxAndMinArray diffArray, negativeCounter, positiveCounter, previousPanelCounter, _
+        upperAnglePositive, lowerAnglePositive, upperAngleNegative, lowerAngleNegative, upperAngle, _
+        lowerAngle, ii
+        
+    End If
+
+    'Assign values to the array
+    angleArray(0) = lowerAngle
+    angleArray(1) = upperAngle
+    
+    Debug.Print "Number of Previous Panels: " & previousPanelCounter 'Debug code
+    Debug.Print "Minimum Angle Previous: " & lowerAngle 'Debug code
+    Debug.Print "Maximum Angle Previous: " & upperAngle 'Debug code
+    
+    MinAndMaxDTOPointDataPrevious = angleArray
+    
+End Function
+
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@Description "Function to find the maximum and minimum angles for point 4 (previous panel)."
+'It will find the difference and give, as result an array with 2 entries [minimum, maximum].
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+Private Function MinAndMaxDTOPointDataNext(ByRef nextPanelData() As Variant, _
+ByVal nextPanelCounter As Integer, _
+ByRef dto As CWallFootingDTO) As Variant()
+    
+    'Declare variables
+    Dim diffArray() As Variant
+    Dim angleArray(0 To 1) As Variant
+    Dim upperAnglePositive As Double
+    Dim lowerAnglePositive As Double
+    Dim upperAngleNegative As Double
+    Dim lowerAngleNegative As Double
+    Dim upperAngle As Double
+    Dim lowerAngle As Double
+    Dim ii As Integer
+    Dim negativeCounter As Integer
+    Dim positiveCounter As Integer
+    
+    'Inicial values of minimum (really big value) and maximum (really small value)
+    lowerAnglePositive = 2147483647
+    upperAnglePositive = -2147483647
+    lowerAngleNegative = 2147483647
+    upperAngleNegative = -2147483647
+    negativeCounter = 0
+    positiveCounter = 0
+    
+    'Find the angles for isolated panel
+    If nextPanelCounter = 0 Then
+        lowerAngle = dto.horizontalAngle - dto.complementaryhorizontalAngle
+        upperAngle = lowerAngle
+        
+    'Find the angles for a panel with 1 connected and connected to Point1 of that panel
+    ElseIf nextPanelCounter = 1 And _
+    dto.IsPoint4CoincidentCoordinates(nextPanelData(1, 0), nextPanelData(2, 0)) Then
+        lowerAngle = nextPanelData(5, 0) - dto.complementaryhorizontalAngle
+        upperAngle = lowerAngle
+        
+    'Find the angles for a panel with 1 connected and connected to Point4 of that panel
+    ElseIf nextPanelCounter = 1 And _
+    Not dto.IsPoint4CoincidentCoordinates(nextPanelData(3, 0), nextPanelData(4, 0)) Then
+        lowerAngle = nextPanelData(6, 0) - dto.complementaryhorizontalAngle
+        upperAngle = lowerAngle
+        
+    Else
+        ReDim diffArray(0 To nextPanelCounter - 1) As Variant
+        'For Next loop to find, for panel Point1, all the differences between angles of the panels,
+        'and fill an array "diffArray()" with all those values
+        For ii = 0 To nextPanelCounter - 1
+            If dto.IsPoint4CoincidentCoordinates(nextPanelData(1, ii), nextPanelData(2, ii)) Then
+                diffArray(ii) = nextPanelData(5, ii) - dto.complementaryhorizontalAngle
+                If nextPanelData(5, ii) - dto.complementaryhorizontalAngle > 0 Then
+                    positiveCounter = positiveCounter + 1
+                Else
+                    negativeCounter = negativeCounter + 1
+                End If
+            Else
+                diffArray(ii) = nextPanelData(6, ii) - dto.complementaryhorizontalAngle
+                
+                If nextPanelData(6, ii) - dto.complementaryhorizontalAngle > 0 Then
+                    positiveCounter = positiveCounter + 1
+                Else
+                    negativeCounter = negativeCounter + 1
+                End If
+            End If
+        Next ii
+        
+        FindMaxAndMinArray diffArray, negativeCounter, positiveCounter, nextPanelCounter, _
+        upperAnglePositive, lowerAnglePositive, upperAngleNegative, lowerAngleNegative, upperAngle, _
+        lowerAngle, ii
+        
+    End If
+
+    'Assign values to the array
+    angleArray(0) = lowerAngle
+    angleArray(1) = upperAngle
+    
+    Debug.Print "Number of Next Panels: " & nextPanelCounter 'Debug code
+    Debug.Print "Minimum Angle Next:" & lowerAngle 'Debug code
+    Debug.Print "Maximum Angle Next:" & upperAngle 'Debug code
+
+    MinAndMaxDTOPointDataNext = angleArray
+    
+End Function
+
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@Description "Procedure to construct the array with the minimum and max values."
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+Private Sub FindMaxAndMinArray(ByRef diffArray As Variant, ByRef negativeCounter As Integer, _
+ByRef positiveCounter As Integer, ByRef adjacentPanelCounter As Integer, _
+ByRef upperAnglePositive As Double, ByRef lowerAnglePositive As Double, _
+ByRef upperAngleNegative As Double, ByRef lowerAngleNegative As Double, _
+ByRef upperAngle As Double, ByRef lowerAngle As Double, ByRef ii As Integer)
+
+        'Code to run in case we have positive and negative values,
+        'finding the absolume minimum for both positive and negative
+        If positiveCounter <> 0 And negativeCounter <> 0 Then
+            For ii = 0 To adjacentPanelCounter - 1
+        
+                If diffArray(ii) > 0 And diffArray(ii) < lowerAnglePositive Then
+                    lowerAnglePositive = diffArray(ii)
+                    upperAngle = lowerAnglePositive
+                ElseIf diffArray(ii) < 0 And diffArray(ii) > upperAngleNegative Then
+                    upperAngleNegative = diffArray(ii)
+                    lowerAngle = upperAngleNegative
+                End If
+            Next ii
+        
+        'Find the minimum and maximum of positive values
+        ElseIf positiveCounter <> 0 And negativeCounter = 0 Then
+            For ii = 0 To adjacentPanelCounter - 1
+                If diffArray(ii) > upperAnglePositive Then
+                    upperAnglePositive = diffArray(ii)
+                    upperAngle = upperAnglePositive
+                End If
+                If diffArray(ii) < lowerAnglePositive Then
+                    lowerAnglePositive = diffArray(ii)
+                    lowerAngle = lowerAnglePositive
+                End If
+            Next ii
+            
+        'Find the minimum and maximum of negative values
+        Else
+            For ii = 0 To adjacentPanelCounter - 1
+                If diffArray(ii) > upperAngleNegative Then
+                    upperAngleNegative = diffArray(ii)
+                     upperAngle = upperAngleNegative
+                End If
+                If diffArray(ii) < lowerAngleNegative Then
+                    lowerAngleNegative = diffArray(ii)
+                    lowerAngle = lowerAngleNegative
+                End If
+            Next ii
+            upperAngle = upperAngleNegative
+
+        End If
+End Sub
+
+Private Sub ClearContentsFromCells()
+    
+    Range("B13").ClearContents
+    Range("B14").ClearContents
+    Range("C13").ClearContents
+    Range("C14").ClearContents
+
+End Sub
+

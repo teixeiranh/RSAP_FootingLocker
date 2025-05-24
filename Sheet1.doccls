@@ -1,0 +1,154 @@
+﻿'@Folder "RSAPFootings.01_IsolatedFooting"
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@ModuleDescription "Procedure that creates an isolated footing on the selected nodes."
+'
+'input: Robot Structural Analysis node selection.
+'output: Horizontal panel modelling the foundation/footing slab object.
+'
+'Developer: Nuno Teixeira
+'Email: teixeiranh@gmail.com
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+'@IgnoreModule UseMeaningfulName
+'@IgnoreModule ParameterCanBeByVal
+'@IgnoreModule MoveFieldCloserToUsage
+Option Explicit
+
+'@VariableDescription("Public object representing an RobotApplication.")
+Private robApp As RobotApplication
+'@VariableDescription("Public object representing an RobotStructure.")
+Private structure As RobotStructure
+'@VariableDescription("Public object representing an RobotPointsArray.")
+Private points As RobotPointsArray
+
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@Description "Main Procedure"
+'Each of the created slabs (one slab per column) will have 5 characteristic points created, ie,
+'one for each corner and a 5th to close the panel.
+'/////////////////////////////////////////////////////////////////////////////////////////////////
+'
+'@Ignore ProcedureNotUsed
+Public Sub MainCreateColumnFootings()
+
+    'Declaring variables
+    Set robApp = New RobotApplication
+    Set structure = robApp.Project.structure
+    Dim RobotNodes As RobotNodeServer
+    Set RobotNodes = robApp.Project.structure.Nodes
+    Dim NodeSel As RobotSelection
+    Set NodeSel = robApp.Project.structure.Selections.Get(I_OT_NODE)
+    Dim labels As RobotLabelServer
+    Set labels = structure.labels
+    
+    Dim dLargura As Double
+    dLargura = Range("C2").value
+    Dim dAltura As Double
+    dAltura = Range("C3").value
+    
+    Dim slabSectionName As String
+    slabSectionName = Range("C5").value
+    Dim foundationThickness As Double
+    foundationThickness = Range("C4").value
+
+    Dim dto As CColumnFootingDTO
+    Set dto = New CColumnFootingDTO
+    dto.raioMaior = Sqr((dLargura / 2) ^ 2 + (dAltura / 2) ^ 2)
+    dto.angleOfRotation = MMathUtilities.ConvertToRadians(Range("C8").value)
+    dto.anguloDiagonal = Atn((dAltura / 2) / (dLargura / 2))
+    dto.excentricadeX = Range("C6").value
+    dto.excentricadeY = Range("C7").value
+
+    On Error GoTo ErrorHandler
+    'Set of procedures to "set the stage"
+    MRSAPUtilities.VerifyIfRobotIsOpened
+    MRSAPUtilities.SetActiveStates
+    'Method to assign thickness to slab, with all the properties necessary
+    MRSAPUtilities.AssignThickness labels, slabSectionName, foundationThickness
+    'Method to create the specified footings
+    CreateFooting NodeSel, dto, slabSectionName, RobotNodes
+    'Refresh RSAP view
+    robApp.Project.ViewMngr.Refresh
+    'Clean variables
+    MRSAPUtilities.CleanVariables
+    
+    Exit Sub
+ErrorHandler:
+    MsgBox (MConstants.ERROR_MESSAGE)
+    ClearContentsFromCells
+                            
+End Sub
+
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@Description "Code to create a footing."
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+Private Sub CreateFooting(ByRef NodeSel As RobotSelection, ByRef dto As CColumnFootingDTO, _
+ByRef slabSectionName As String, ByRef RobotNodes As RobotNodeServer)
+
+    Range("B16").value = "Node: "
+    Range("B17").value = "Nodes: "
+    Range("C17").value = NodeSel.Count
+    Dim ii As Integer
+    
+    For ii = 1 To NodeSel.Count
+        
+        Range("C16").value = ii
+        
+        'Declaring variables
+        Dim nodeSelectedLocationX As Double
+        nodeSelectedLocationX = RobotNodes.Get(NodeSel.Get(ii)).X
+        Dim nodeSelectedLocationY As Double
+        nodeSelectedLocationY = RobotNodes.Get(NodeSel.Get(ii)).Y
+        Dim nodeSelectedLocationZ As Double
+        nodeSelectedLocationZ = RobotNodes.Get(NodeSel.Get(ii)).z
+
+        Set points = robApp.CmpntFactory.Create(I_CT_POINTS_ARRAY)
+        points.SetSize 5
+        'Property assignement for the created points (definition of geometric location)
+        With points
+            'Node 1
+            .Set 1, _
+            nodeSelectedLocationX + dto.raioMaior * Cos(dto.angleOfRotation + dto.anguloDiagonal) + dto.excentricadeX, _
+            nodeSelectedLocationY + dto.raioMaior * Sin(dto.angleOfRotation + dto.anguloDiagonal) + dto.excentricadeY, _
+            nodeSelectedLocationZ
+            'Node 2
+            .Set 2, _
+            nodeSelectedLocationX + dto.raioMaior * Cos(dPi - dto.anguloDiagonal + dto.angleOfRotation) + dto.excentricadeX, _
+            nodeSelectedLocationY + dto.raioMaior * Sin(dPi - dto.anguloDiagonal + dto.angleOfRotation) + dto.excentricadeY, _
+            nodeSelectedLocationZ
+            'Node 3
+            .Set 3, _
+            nodeSelectedLocationX + dto.raioMaior * Cos(dPi + dto.anguloDiagonal + dto.angleOfRotation) + dto.excentricadeX, _
+            nodeSelectedLocationY + dto.raioMaior * Sin(dPi + dto.anguloDiagonal + dto.angleOfRotation) + dto.excentricadeY, _
+            nodeSelectedLocationZ
+            'Node 4
+            .Set 4, _
+            nodeSelectedLocationX + dto.raioMaior * Cos(2 * dPi - dto.anguloDiagonal + dto.angleOfRotation) + dto.excentricadeX, _
+            nodeSelectedLocationY + dto.raioMaior * Sin(2 * dPi - dto.anguloDiagonal + dto.angleOfRotation) + dto.excentricadeY, _
+            nodeSelectedLocationZ
+            'Node 5
+            .Set 5, _
+            nodeSelectedLocationX + dto.raioMaior * Cos(dto.angleOfRotation + dto.anguloDiagonal) + dto.excentricadeX, _
+            nodeSelectedLocationY + dto.raioMaior * Sin(dto.angleOfRotation + dto.anguloDiagonal) + dto.excentricadeY, _
+            nodeSelectedLocationZ
+            
+            MRSAPUtilities.CreatePanel points, slabSectionName
+        
+        End With
+    Next ii
+    
+    ClearContentsFromCells
+
+End Sub
+
+Private Sub ClearContentsFromCells()
+    
+    Range("B16").ClearContents
+    Range("B17").ClearContents
+    Range("C16").ClearContents
+    Range("C17").ClearContents
+
+End Sub
+
+
+

@@ -1,0 +1,243 @@
+﻿'@Folder "RSAPFootings.03_FoundationSlab"
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@ModuleDescription "Procedure that creates a slab footing the the group of selected objects."
+'
+'This feature has 2 options:
+'-the user specifies the foundation dimension and the scrip creates a centered slab foundation;
+'-the user specifies an offset and the scrip will offset the geomtry of the selected panels.
+'
+'input: Robot Structural Analysis panel selection.
+'output: Modelling the foundation/footing slab object.
+'
+'Developer: Nuno Teixeira
+'Email: teixeiranh@gmail.com
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+'@IgnoreModule UseMeaningfulName
+'@IgnoreModule ParameterCanBeByVal
+Option Explicit
+
+Private robApp As RobotApplication
+Private structure As RobotStructure
+
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@Description "Main Procedure"
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+'@Ignore ProcedureNotUsed
+Public Sub MainCreateSlabFooting()
+
+    Debug.Print "----------------------" 'Debug code
+    Debug.Print "---------RUN----------" 'Debug code
+    Debug.Print "----------------------" 'Debug code
+
+    'Declaring variables
+    Set robApp = New RobotApplication
+    Set structure = robApp.Project.structure
+    Dim objectServer As RobotObjObjectServer
+    Set objectServer = structure.Objects
+    Dim labels As RobotLabelServer
+    Set labels = structure.labels
+    Dim panelSelection As RobotSelection
+    Set panelSelection = robApp.Project.structure.Selections.Get(I_OT_PANEL)
+
+    Dim contourGeometry As RobotGeoContour
+    Dim segments As RobotGeoSegmentCollection
+    '@Ignore VariableNotUsed, VariableNotAssigned
+    Dim segment As RobotGeoSegment
+    Dim currentPanel As RobotObjObject
+
+    Dim points As RobotPointsArray
+    Dim footingPoints As CSlabFootingPoints
+    Set footingPoints = New CSlabFootingPoints
+    
+    Dim ii As Integer
+    Dim numberOfSegments As Integer
+    
+    'Get values from UI
+    Dim userOptionsDTO As CFoundationSlabUIDTO
+    Set userOptionsDTO = New CFoundationSlabUIDTO
+    
+    With userOptionsDTO
+    .typeOfFoundation = Range("C2").value
+    .width = Range("C3").value
+    .lenth = Range("C4").value
+    .offset = Range("C5").value
+    .foundationThickness = Range("C6").value
+    .slabSectionName = Range("C7").value
+    End With
+    
+    MRSAPUtilities.VerifyIfRobotIsOpened
+    MRSAPUtilities.SetActiveStates
+    'Method to assign thickness to slab, with all the properties necessary
+    MRSAPUtilities.AssignThickness labels, userOptionsDTO.slabSectionName, _
+    userOptionsDTO.foundationThickness
+
+    Range("B13").value = "Wall: "
+    Range("B14").value = "Walls: "
+    Range("C14").value = panelSelection.Count
+
+    On Error GoTo ErrorHandler
+    'For next loop to traverse panel selection
+    For ii = 1 To panelSelection.Count
+        Range("C13").value = ii
+        Set currentPanel = objectServer.Get(panelSelection.Get(ii))
+        Debug.Print "----------------------"
+        Debug.Print "Panel: " & currentPanel.Number 'Debug code
+        'Check if panel ii is properly defined
+        If currentPanel.Main.GetGeometry.Type = I_GOT_CONTOUR Then
+            Set contourGeometry = currentPanel.Main.GetGeometry
+            Set segments = contourGeometry.segments
+            'Array to store panel's bootom edge information
+            Dim PointData() As Variant
+            numberOfSegments = segments.Count
+            ReDim PointData(numberOfSegments, 4)
+            UpdateDTOValues segments, footingPoints, PointData
+            'Nested for loop, to get information related with neighbour panels
+        End If
+        'Method to create slab points, back to Robot Structural Analysis
+    Next ii
+    CreateFoundationSlab points, userOptionsDTO, footingPoints
+
+    'Refresh RSAP view manager
+    robApp.Project.ViewMngr.Refresh
+    'Clean variables
+    MRSAPUtilities.CleanVariables
+    ClearContentsFromCells
+    
+    Exit Sub
+ErrorHandler:
+    MsgBox (MConstants.ERROR_MESSAGE)
+    ClearContentsFromCells
+    
+End Sub
+
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@Description "Creates the foundation slab in RSAP."
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+Private Sub CreateFoundationSlab(ByRef points As RobotPointsArray, ByRef userOptionsDTO As CFoundationSlabUIDTO, _
+ByRef footingPoints As CSlabFootingPoints)
+
+    Set structure = robApp.Project.structure
+    Set points = robApp.CmpntFactory.Create(I_CT_POINTS_ARRAY)
+    points.SetSize 5
+    
+    If Range("C2").value = "Offset" Then
+          
+        'Define the nodes in Robot
+        With points
+            'Node1
+            .Set 1, footingPoints.x2Coordinate + userOptionsDTO.offset, _
+            footingPoints.y2Coordinate + userOptionsDTO.offset, _
+            footingPoints.zCoordinate
+            'Node2
+            .Set 2, footingPoints.x1Coordinate - userOptionsDTO.offset, _
+            footingPoints.y2Coordinate + userOptionsDTO.offset, _
+            footingPoints.zCoordinate
+            'Node3
+            .Set 3, footingPoints.x1Coordinate - userOptionsDTO.offset, _
+            footingPoints.y1Coordinate - userOptionsDTO.offset, _
+            footingPoints.zCoordinate
+            'Node4
+            .Set 4, footingPoints.x2Coordinate + userOptionsDTO.offset, _
+            footingPoints.y1Coordinate - userOptionsDTO.offset, _
+            footingPoints.zCoordinate
+            'Node5
+            .Set 5, footingPoints.x2Coordinate + userOptionsDTO.offset, _
+            footingPoints.y2Coordinate + userOptionsDTO.offset, _
+            footingPoints.zCoordinate
+        End With
+        
+    Else
+        Dim xMedCoordinate As Double
+        Dim YMedCoordinate As Double
+        
+        xMedCoordinate = footingPoints.x2Coordinate - (footingPoints.x2Coordinate - footingPoints.x1Coordinate) / 2
+        YMedCoordinate = footingPoints.y2Coordinate - (footingPoints.y2Coordinate - footingPoints.y1Coordinate) / 2
+        
+        'Define the nodes in Robot
+        With points
+            'Node1
+            .Set 1, xMedCoordinate + userOptionsDTO.width / 2, _
+            YMedCoordinate + userOptionsDTO.lenth / 2, _
+            footingPoints.zCoordinate
+            'Node2
+            .Set 2, xMedCoordinate - userOptionsDTO.width / 2, _
+            YMedCoordinate + userOptionsDTO.lenth / 2, _
+            footingPoints.zCoordinate
+            'Node3
+            .Set 3, xMedCoordinate - userOptionsDTO.width / 2, _
+            YMedCoordinate - userOptionsDTO.lenth / 2, _
+            footingPoints.zCoordinate
+            'Node4
+            .Set 4, xMedCoordinate + userOptionsDTO.width / 2, _
+            YMedCoordinate - userOptionsDTO.lenth / 2, _
+            footingPoints.zCoordinate
+            'Node5
+            .Set 5, xMedCoordinate + userOptionsDTO.width / 2, _
+            YMedCoordinate + userOptionsDTO.lenth / 2, _
+            footingPoints.zCoordinate
+        End With
+
+    End If
+    
+    MRSAPUtilities.CreatePanel points, userOptionsDTO.slabSectionName
+
+End Sub
+
+
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'@Description "Fills the values back to the DTO."
+'//////////////////////////////////////////////////////////////////////////////////////////////////
+'
+Private Sub UpdateDTOValues(ByRef segments As RobotGeoSegmentCollection, _
+ByRef footingPoints As CSlabFootingPoints, _
+ByRef PointData() As Variant)
+
+    'Declaring variables
+    Dim ii As Integer
+    
+    For ii = 1 To segments.Count
+        Dim segment As RobotGeoSegment
+        Set segment = segments.Get(ii)
+        PointData(ii, 2) = WorksheetFunction.Round(segment.P1.X, MConstants.TOLERANCE)
+        PointData(ii, 3) = WorksheetFunction.Round(segment.P1.Y, MConstants.TOLERANCE)
+        PointData(ii, 4) = WorksheetFunction.Round(segment.P1.z, MConstants.TOLERANCE)
+        
+
+        If PointData(ii, 4) <= footingPoints.zCoordinate Then
+            footingPoints.zCoordinate = PointData(ii, 4)
+        End If
+        
+        If PointData(ii, 2) < footingPoints.x1Coordinate Then
+            footingPoints.x1Coordinate = PointData(ii, 2)
+        End If
+        
+        If PointData(ii, 3) < footingPoints.y1Coordinate Then
+            footingPoints.y1Coordinate = PointData(ii, 3)
+        End If
+        
+        If PointData(ii, 2) > footingPoints.x2Coordinate Then
+            footingPoints.x2Coordinate = PointData(ii, 2)
+        End If
+        
+        If PointData(ii, 3) > footingPoints.y2Coordinate Then
+            footingPoints.y2Coordinate = PointData(ii, 3)
+        End If
+
+    Next ii
+    
+End Sub
+
+Private Sub ClearContentsFromCells()
+    
+    Range("B13").ClearContents
+    Range("B14").ClearContents
+    Range("C13").ClearContents
+    Range("C14").ClearContents
+
+End Sub
+
+
+

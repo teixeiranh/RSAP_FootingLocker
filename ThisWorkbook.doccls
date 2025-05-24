@@ -1,0 +1,41 @@
+﻿'@IgnoreModule UseMeaningfulName
+'@IgnoreModule ImplicitActiveSheetReference
+'/////////////////////////////////////////////////////////////////////////////////////////////////
+'@ModuleDescription "Procedure to run as soon as the workbook is opened."
+'/////////////////////////////////////////////////////////////////////////////////////////////////
+'
+Option Explicit
+
+Private Sub Workbook_Open()
+
+    Application.ScreenUpdating = False
+    
+    Dim ws As Worksheet
+    Set ws = ActiveSheet
+    Const ZOOM_LEVEL As Double = 160
+    
+    Sheet1.Activate
+    ActiveSheet.Range("C2").Select
+    ActiveWindow.DisplayGridlines = False
+    ActiveWindow.Zoom = ZOOM_LEVEL
+    
+    Sheet3.Activate
+    ActiveSheet.Range("C2").Select
+    ActiveWindow.DisplayGridlines = False
+    ActiveWindow.Zoom = ZOOM_LEVEL
+    
+    Sheet5.Activate
+    ActiveSheet.Range("C2").Select
+    ActiveWindow.DisplayGridlines = False
+    ActiveWindow.Zoom = ZOOM_LEVEL
+    
+    ws.Activate
+    
+    Application.ScreenUpdating = True
+
+'@Ignore LineLabelNotUsed
+ErrorHandler:
+        Application.ScreenUpdating = True
+        Exit Sub
+
+End Sub
